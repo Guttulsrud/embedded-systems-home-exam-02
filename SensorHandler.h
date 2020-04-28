@@ -3,7 +3,7 @@
 #include "Adafruit_DHT_Particle.h"
 #include "Particle.h"
 #define DHTPIN 5
-const int sensor_pin = A1; /* Soil moisture sensor O/P pin */
+const int sensor_pin = A1;
 
 #define DHTTYPE DHT11
 DHT DHT(DHTPIN, DHTTYPE);
@@ -12,14 +12,11 @@ class SensorHandler {
 public:
   SensorHandler() { DHT.begin(); }
 
-  String getDTHSensorJSON() {
-    return "{\"field1\":" + String(getTemperature()) +
-           ",\"field2\":" + String(getHumidity()) + "}";
-  }
-
-  String getMoistureAndLightJSON() {
-    return "{\"field3\":" + String(getLightLevel()) +
-           ",\"field4\":" + String(getMoisture()) + "}";
+  String getSensorDataJSON() {
+    return "{\"field1\": " + String((int)getTemperature()) +
+           ", \"field2\": " + String((int)getHumidity()) +
+           ", \"field3\": " + String(getLightLevel()) +
+           ", \"field4\": " + String((int)getMoisture()) + "}";
   }
 
   int getLightLevel() {
@@ -33,7 +30,8 @@ public:
     }
   }
 
-private:
+  bool nightTime() { return getLightLevel() < 5; }
+
   float getMoisture() { return analogRead(sensor_pin) / 10; }
 
   float getHumidity() {
@@ -58,6 +56,7 @@ private:
     return newTemperature;
   }
 
+private:
   float humidity = 0;
   float temperature = 0;
   byte light = 0;
