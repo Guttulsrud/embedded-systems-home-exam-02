@@ -1,111 +1,137 @@
 
-#include "../SensorHandler.h"
-#include "Particle.h"
-#include "TimeAlarms/TimeAlarms.h"
-#include <Wire.h>
-void hookResponseHandler(const char *event, const char *data);
+#include "SensorHandler.h"
+#include "WebHookHandler.h"
 
-const byte button = D7;
-const byte arduinoAdress = 0x08;
-byte i2cError;
+#include "SlaveHandler.h"
+
+#include "TimeAlarms/TimeAlarms.h"
+
+#include <Wire.h>
+
 SensorHandler sensorHandler;
+WebHookHandler hooks;
+SlaveHandler slave;
 
 void setup() {
+
   Wire.begin();
   Serial.begin(9600);
-  pinMode(button, INPUT_PULLUP);
   Time.zone(+2);
   setUpTimer();
-}
 
-enum State { OPEN, CLOSED, CHANGING };
-
-State state = OPEN;
-
-void checkState() {
-  if (state == CLOSED) {
-    if (sensorHandler.getLightLevel() > 40) {
-      // sendCommandToArduino(65);
-    }
-  } else if (state == OPEN) {
-    if (sensorHandler.getLightLevel() > 40) {
-      // sendCommandToArduino(55);
-    }
-  }
+  hooks.setup();
+  slave.setup();
+  Particle.function("dashboardrequest", handleDashboardRequest);
+  Particle.subscribe("hook-response/Weather", handleWeatherResponse,
+                     MY_DEVICES);
+  Particle.subscribe("TwitterMention", myHandler);
+  Particle.subscribe("Google_Assistant", publishStatsWithAssistant);
+  Particle.subscribe("GA_State", handleGAStateChange);
+  // Particle.subscribe("GA_Open", openLidWithAssistant);
 }
 
 void loop() {
+
   if (Particle.connected()) {
-    checkState();
+    handleState();
+    Alarm.delay(1);
+    delay(3000);
   }
-  publishContinualSensorData();
-  delay(15000);
-  Alarm.delay(1);
 }
 
-bool closeCase() {}
+void handleState() {
 
-sendCommandToArduino(2);
-}
+  State state = slave.getState();
+  Serial.print("State === ");
 
-void setUpTimer() { Alarm.timerRepeat(60, publishTimedSensorData); }
+  if (state == WAITING && !sensorHandler.nightTime()) {
+    return;
+  }
 
-void publishContinualSensorData() {
-  if (publishToWebHook("temp", sensorHandler.getMoistureAndLightJSON())) {
-    Serial.println("Publish light & moisture");
+  if (sensorHandler.nightTime()) {
+    // night time
+    slave.closeLid();
   } else {
+    // day time
+
+    if (state == CLOSED_LID) {
+      slave.openLid();
+    } else if (state == TRIGGERED) {
+      Serial.println("triggered!");
+      // hooks.sendSMS("Plant detected movement. Closing lid.");
+      // hooks.sendMail("Plant detected movement. Closing lid.");
+      slave.setWaiting();
+    }
   }
 }
 
 void publishTimedSensorData() {
-  if (publishToWebHook("temp", sensorHandler.getDTHSensorJSON())) {
-    Serial.println("Succsessfully published timed sensor data.");
+  if (hooks.publishToWebHook("temp", sensorHandler.getSensorDataJSON())) {
+    Serial.println("Succsessfully published sensor data.");
   } else {
     Serial.println("Could not publish timed sensor data.");
   }
 }
 
-bool publishToWebHook(const char *webhook, const char *data) {
-  return Particle.publish(webhook, data, PRIVATE);
+void myHandler(const char *event, const char *data) {
+  Serial.println("New mention! :o");
+  String message = String(
+      "Hello! I'm " + String((int)(sensorHandler.getTemperature())) + "C, " +
+      String((int)(sensorHandler.getHumidity())) + "% humid and I also get a " +
+      String(sensorHandler.getLightLevel()) + "% light level! yay");
+  hooks.sendTweet(message);
 }
 
-void sendSMS(const char *message) {
-  Particle.publish("Twilio", message, PRIVATE);
+void publishStatsWithAssistant(const char *event, const char *data) {
+  String message = String(
+      "Hello! I am " + String((int)(sensorHandler.getTemperature())) + "C, " +
+      String((int)(sensorHandler.getHumidity())) + "% humid and I also get a " +
+      String(sensorHandler.getLightLevel()) + "% light level! yay");
+  Serial.println("sending sms!");
+
+  // postTwitterStatus(message);
+  // sendSMS(message);
 }
 
-void postTwitterStatus(const char *message) {
-  Particle.publish("Twitter_Status", message, 60, PRIVATE);
-}
+void handleGAStateChange(const char *event, String data) {
 
-void hookResponseHandler(const char *event, const char *data) {
-  //  String data2 = "{\"field3\":"+ String(data)+"}";
-  //  Particle.publish("pressure", data, PRIVATE);
-  //  Serial.println(data);
-}
-
-bool sendCommandToArduino(int command) {
-  Wire.beginTransmission(arduinoAdress);
-  Wire.write(command);
-  i2cError = Wire.endTransmission();
-
-  switch (i2cError) {
-  case 0:
-    Serial.println("Success!");
-    return true;
-  case 1:
-    Serial.println("data too long to fit in transmit buffer");
-    break;
-  case 2:
-    Serial.println("received NACK on transmit of address");
-    break;
-  case 3:
-    Serial.println("received NACK on transmit of data");
-    break;
-  case 4:
-    Serial.println("unknown error!");
-    break;
-  default:
-    Serial.println("no work");
+  if (data == "please close") {
+    if (slave.closeLid()) {
+      slave.setWaiting();
+    }
+  } else if (data == "please open") {
+    slave.openLid();
   }
-  return false;
 }
+
+void setUpTimer() {
+  Alarm.timerRepeat(60, publishTimedSensorData);
+  Alarm.timerRepeat(3600, sendWeatherApiRequest);
+}
+
+int handleWeatherResponse(const char *event, String data) {
+  if (data == "Light Rain" || data == "Heavy Rain") {
+    if (slave.closeLid()) {
+      slave.setWaiting();
+    }
+    hooks.sendSMS("Weather forecasting: Rain. Closing lid.");
+    hooks.sendMail("Weather forecasting: Rain. Closing lid.");
+  }
+}
+
+int handleDashboardRequest(String command) {
+  Serial.println(command);
+  if (command == "close") {
+    if (slave.closeLid()) {
+      slave.setWaiting();
+    }
+  } else if (command == "open") {
+    slave.openLid();
+  } else if (command == "safe") {
+    slave.secureModeOn();
+  } else if (command == "safe_off") {
+    slave.secureModeOff();
+  }
+}
+
+void sendWeatherApiRequest() { Particle.publish("Weather", "", PRIVATE); }
