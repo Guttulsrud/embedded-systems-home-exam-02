@@ -11,17 +11,14 @@ const int trigPin = 4;
 const int echoPin = 3;
 long duration = 0;
 int distance = 0;
-bool movementTrigger = false;
 enum State {
-  SECURE_OPEN_LID,
-  SECURE_OFF_OPEN_LID,
-  CLOSED_LID,
-  BUSY,
+  OPEN_BOX_SECURE,
+  OPEN_BOX,
+  CLOSED_BOX,
   TRIGGERED,
   WAITING
 };
-State state = SECURE_OFF_OPEN_LID;
-
+State state = OPEN_BOX_SECURE;
 
 void setup() {
   Serial.begin(9600);
@@ -38,13 +35,11 @@ void setup() {
 
 void loop(void) {
   listenForI2cEvent();
-  Serial.print("State:");
-  Serial.println(state);
-  if (state == SECURE_OPEN_LID) {
-    Serial.println("State: Secure");
+  if (state == OPEN_BOX_SECURE) {
+      Serial.println("Secure mode on!");
+
     getDistance();
     if (distance < 6) {
-      Serial.println("Movement detected!");
       closeLid();
       state = TRIGGERED;
     }
@@ -60,7 +55,6 @@ void getDistance() {
   digitalWrite(trigPin, LOW);
   duration = pulseIn(echoPin, HIGH);
   distance = duration * 0.034 / 2;
-  Serial.println(distance);
   delay(1000);
 }
 
@@ -69,30 +63,21 @@ void listenForI2cEvent() {
 
     switch (photonCommand) {
       case 0:
-        Serial.println("Closing");
         closeLid();
         break;
       case 1:
-        Serial.println("Opening:");
         openLid();
         break;
       case 2:
         waterOn();
-        Serial.println("waterOn:");
         break;
       case 3:
-        waterOff();
-        Serial.println("waterOff:");
-        break;
-      case 4:
         enableSecureMode();
         break;
-      case 5:
+      case 4:
         disableSecureMode();
         break;
-      case 6:
-        delay(2000);
-        Serial.println("Waiting run on Arduino");
+      case 5:
         state = WAITING;
     }
     photonCommand = 0;
@@ -109,47 +94,40 @@ void waterOff() {
 }
 
 void waterOn() {
-  Serial.println("waterOn()");
-
   for (int i = 180; i > 10; i--) {
     servo.write(i);
     delay(18);
   }
+  delay(5000);
+  waterOff();
 }
 
-
 void closeLid() {
-  state = BUSY;
   digitalWrite(7, HIGH);
   myStepper.step(-stepsPerRevolution * 10);
   digitalWrite(7, LOW);
-  state = CLOSED_LID;
+  state = CLOSED_BOX;
 }
 
 void openLid() {
-  state = BUSY;
   digitalWrite(7, HIGH);
   myStepper.step(stepsPerRevolution * 10);
   delay(1000);
   digitalWrite(7, LOW);
-  state = SECURE_OPEN_LID;
+  state = OPEN_BOX_SECURE;
 }
 void receiveEvent (int howMany) {
   photonCommand = Wire.read();
-  Serial.println(photonCommand);
   listening = true;
 }
 
 void enableSecureMode() {
-  Serial.println("enableSecureMode()");
-  state = SECURE_OPEN_LID;
+  state = OPEN_BOX_SECURE;
 }
 
 void disableSecureMode() {
-  Serial.println("disableSecureMode()");
-  state = SECURE_OFF_OPEN_LID;
+  state = OPEN_BOX;
 }
-
 
 void requestEvent()  {
   Wire.write(state);
